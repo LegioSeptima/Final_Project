@@ -1,0 +1,432 @@
+---
+title: "HarryPotter"
+author: "Steven Tran"
+date: "April 21, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(tidytext)
+library(rvest) 
+library(RSelenium) 
+library(data.table)
+library(wordcloud)
+library(tidyverse)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+library(ggthemes)
+
+data("stop_words")
+load("myEnvironment.RData")
+opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, tidy.opts=list(width.cutoff=60),tidy=TRUE)
+
+unnestIt <- function(df) 
+  df %>% 
+  unnest_tokens(word, text) %>%
+    anti_join(stop_words) %>%
+    count(word, sort = TRUE) 
+
+wordCount <- function(unnested, x) {
+  unnested %>%
+    filter(n > x) %>%
+    mutate(word = reorder(word, n)) %>% 
+    ggplot(aes(word, n)) +
+    geom_col() +
+    xlab(NULL) +
+    coord_flip()+
+    theme_light()
+}
+
+sentimentCount <- function(df, name) {
+  df %>%
+    unnest_tokens(word, text) %>%
+    inner_join(get_sentiments("nrc") %>% filter(!sentiment == "negative" & !sentiment == "positive")) %>%
+    count(sentiment, sort = TRUE) %>%
+    mutate(sentiment = reorder(sentiment, n)) %>%
+    ggplot(aes(sentiment, n)) +
+    geom_col() +
+    xlab(NULL) +
+    ggtitle(name) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    coord_flip()+
+    theme_grey()
+}
+
+convert <- function(x) {
+  if (x == "it was amazing") {
+    return(5)
+  } else if (x == "really liked it") {
+    return(4)
+  } else if (x == "liked it") {
+    return(3)
+  } else if (x == "it was ok") {
+    return(2)
+  } else {
+    return(1)
+  }
+}
+
+organize <- function(x) {
+  if (x == "Harry Potter and the Sorcerer's Stone") {
+    return(1)
+  } else if (x == "Harry Potter and the Chamber of Secrets") {
+    return(2)
+  } else if (x == "Harry Potter and the Prisoner of Azkaban") {
+    return(3)
+  } else if (x == "Harry Potter and the Goblet of Fire") {
+    return(4)
+  } else if (x == "Harry Potter and the Order of the Phoenix") {
+    return(5)
+  } else if (x == "Harry Potter and the Half Blood Prince") {
+    return(6)
+  } else {
+    return(7)
+  }
+}
+```
+
+```{r, eval=FALSE}
+## The following code is for obtaining ratings for each of the Harry Potter books to produce a csv containing 180 observations for each book. Credit to the author of the URL: https://datascienceplus.com/goodreads-webscraping-and-text-analysis-with-r-part-1/
+
+gather <- function(url, book.title, output.filename) {
+  rD <- rsDriver()
+  remDr <- rD[["client"]]
+  remDr$navigate(url)
+
+  global.df <- data.frame(
+    book = character(),
+    date = character(),
+    reviewer = character(),
+    rating = character(),
+    review = character(),
+    stringsAsFactors = F
+  )
+
+  for (x in 1:9) {
+    reviews <- remDr$findElements("css selector", "#bookReviews .stacked")
+    reviews.html <- lapply(reviews, function(x) {
+      x$getElementAttribute("outerHTML")[[1]]
+    })
+    reviews.list <- lapply(reviews.html, function(x) {
+      read_html(x) %>% html_text()
+    })
+    reviews.text <- unlist(reviews.list)
+
+    n <- floor(length(reviews) / 2)
+    reviews.df <- data.frame(
+      book = character(n),
+      date = character(n),
+      reviewer = character(n),
+      rating = character(n),
+      review = character(n),
+      stringsAsFactors = F
+    )
+
+    reviews.text2 <- gsub("[^A-Za-z0-9\\-]|\\.+", " ", reviews.text)
+    reviews.clean <- gsub("\n|[ \t]+", " ", reviews.text2)
+
+
+    for (j in 1:n) {
+      reviews.df$book[j] <- book.title
+
+      auth.rat.sep <- regexpr(
+        " rated it | marked it | added it ",
+        reviews.clean[2 * j - 1]
+      )
+      reviews.df$reviewer[j] <- substr(reviews.clean[2 * j - 1], 13, auth.rat.sep - 1)
+
+      rat.end <- regexpr(
+        "·&nbsp;| Shelves| Recommend| review of another edition",
+        reviews.clean[2 * j - 1]
+      )
+      if (rat.end == -1) {
+        rat.end <- nchar(reviews.clean[2 * j - 1])
+      }
+      reviews.df$rating[j] <- substr(reviews.clean[2 * j - 1], auth.rat.sep + 10, rat.end - 1)
+
+      date.beg <- regexpr(
+        " rated it | marked it | added it ",
+        reviews.clean[2 * j - 1]
+      )
+      reviews.df$date[j] <- substr(reviews.clean[2 * j - 1], 0, 12)
+
+      short.str <- substr(reviews.clean[2 * j], 1, 50)
+      rev.start <- unlist(gregexpr(short.str, reviews.clean[2 * j]))[2]
+      if (is.na(rev.start)) {
+        rev.start <- 1
+      }
+      rev.end <- regexpr("\\.+more|Blog", reviews.clean[2 * j])
+      if (rev.end == -1) {
+        rev.end <- nchar(reviews.clean[2 * j])
+      }
+      reviews.df$review[j] <- substr(reviews.clean[2 * j], rev.start, rev.end - 1)
+    }
+    global.lst <- list(global.df, reviews.df)
+    global.df <- rbindlist(global.lst)
+    NextPageButton <- remDr$findElement("css selector", ".next_page")
+    NextPageButton$clickElement()
+    Sys.sleep(10)
+  }
+  write.csv(global.df, output.filename)
+  remDr$close()
+}
+
+url <- "https://www.goodreads.com/book/show/3.Harry_Potter_and_the_Sorcerer_s_Stone"
+book.title <- "Harry Potter and the Sorcerer's Stone"
+output.filename <- "HarryPotterBook1.csv"
+gather(url, book.title, output.filename)
+
+url <- "https://www.goodreads.com/book/show/15881.Harry_Potter_and_the_Chamber_of_Secrets"
+book.title <- "Harry Potter and the Chamber of Secrets"
+output.filename <- "HarryPotterBook2.csv"
+gather(url, book.title, output.filename)
+
+url <- "https://www.goodreads.com/book/show/5.Harry_Potter_and_the_Prisoner_of_Azkaban?ac=1&from_search=true"
+book.title <- "Harry Potter and the Prisoner of Azkaban"
+output.filename <- "HarryPotterBook3.csv"
+gather(url, book.title, output.filename)
+
+url <- "https://www.goodreads.com/book/show/6.Harry_Potter_and_the_Goblet_of_Fire?ac=1&from_search=true"
+book.title <- "Harry Potter and the Goblet of Fire"
+output.filename <- "HarryPotterBook4.csv"
+gather(url, book.title, output.filename)
+
+url <- "https://www.goodreads.com/book/show/2.Harry_Potter_and_the_Order_of_the_Phoenix?ac=1&from_search=true"
+book.title <- "Harry Potter and the Order of the Phoenix"
+output.filename <- "HarryPotterBook5.csv"
+gather(url, book.title, output.filename)
+
+url <- "https://www.goodreads.com/book/show/1.Harry_Potter_and_the_Half_Blood_Prince?ac=1&from_search=true"
+book.title <- "Harry Potter and the Half Blood Prince"
+output.filename <- "HarryPotterBook6.csv"
+gather(url, book.title, output.filename)
+
+url <- "https://www.goodreads.com/book/show/136251.Harry_Potter_and_the_Deathly_Hallows?ac=1&from_search=true"
+book.title <- "Harry Potter and the Deathly Hallows"
+output.filename <- "HarryPotterBook7.csv"
+gather(url, book.title, output.filename)
+
+
+begin <- "HarryPotterBook"
+end <- ".csv"
+
+ratings.df <- data.frame(
+  book = character(),
+  date = character(),
+  reviewer = character(),
+  rating = character(),
+  review = character(),
+  stringsAsFactors = F
+)
+for (i in 1:7) {
+  df.new <- fread(paste(begin, i, end, sep = "")) %>%
+    select(-c(V1))
+  ratings.df <- rbind(ratings.df, df.new)
+}
+
+ratings.df <- ratings.df %>% filter(rating == "it was amazing" |
+  rating == "really liked it" |
+  rating == "liked it" |
+  rating == "it was ok" |
+  rating == "did not like it")
+ratings.df$rating <- as.integer(lapply(ratings.df$rating, convert))
+
+ratings.df$date <- as.Date(ratings.df$date, " %b %d %Y")
+
+ratings.df <- ratings.df %>% mutate(bookNumber = 0)
+
+ratings.df$bookNumber <- as.integer(lapply(ratings.df$book, organize))
+
+book1ratings <- ratings.df %>% filter(book == "Harry Potter and the Sorcerer's Stone")
+book2ratings <- ratings.df %>% filter(book == "Harry Potter and the Chamber of Secrets")
+book3ratings <- ratings.df %>% filter(book == "Harry Potter and the Prisoner of Azkaban")
+book4ratings <- ratings.df %>% filter(book == "Harry Potter and the Goblet of Fire")
+book5ratings <- ratings.df %>% filter(book == "Harry Potter and the Order of the Phoenix")
+book6ratings <- ratings.df %>% filter(book == "Harry Potter and the Half Blood Prince")
+book7ratings <- ratings.df %>% filter(book == "Harry Potter and the Deathly Hallows")
+
+book1.txt <- read_lines("Harry Potter 1 - Sorcerer's Stone.txt")
+book2.txt <- read_lines("Harry Potter 2 - Chamber of Secrets.txt")
+book3.txt <- read_lines("Harry Potter 3 - The Prisoner of Azkaban.txt")
+book4.txt <- read_lines("Harry Potter 4 - The Goblet of Fire.txt")
+book5.txt <- read_lines("Harry Potter 5 - Order of the Phoenix.txt")
+book6.txt <- read_lines("Harry Potter 6 - The Half Blood Prince.txt")
+book7.txt <- read_lines("Harry Potter 7 - Deathly Hollows.txt")
+
+book1.df <- data_frame(book1.txt)
+book2.df <- data_frame(book2.txt)
+book3.df <- data_frame(book3.txt)
+book4.df <- data_frame(book4.txt)
+book5.df <- data_frame(book5.txt)
+book6.df <- data_frame(book6.txt)
+book7.df <- data_frame(book7.txt)
+
+colnames(book1.df) <- c("text")
+colnames(book2.df) <- c("text")
+colnames(book3.df) <- c("text")
+colnames(book4.df) <- c("text")
+colnames(book5.df) <- c("text")
+colnames(book6.df) <- c("text")
+colnames(book7.df) <- c("text")
+
+text.df <- book1.df %>%
+  rbind(book2.df) %>%
+  rbind(book3.df) %>%
+  rbind(book4.df) %>%
+  rbind(book5.df) %>%
+  rbind(book6.df) %>%
+  rbind(book7.df)
+
+
+ratings2007 <- ratings.df %>%
+  filter(grepl("2007", date))
+book1ratings2007 <- book1ratings %>%
+  filter(grepl("2007", date))
+book2ratings2007 <- book2ratings %>%
+  filter(grepl("2007", date))
+book3ratings2007 <- book3ratings %>%
+  filter(grepl("2007", date))
+book4ratings2007 <- book4ratings %>%
+  filter(grepl("2007", date))
+book5ratings2007 <- book5ratings %>%
+  filter(grepl("2007", date))
+book6ratings2007 <- book6ratings %>%
+  filter(grepl("2007", date))
+book7ratings2007 <- book7ratings %>%
+  filter(grepl("2007", date))
+
+
+
+ratings2018 <- ratings.df %>%
+  filter(grepl("2018", date))
+book1ratings2018 <- book1ratings %>%
+  filter(grepl("2018", date))
+book2ratings2018 <- book2ratings %>%
+  filter(grepl("2018", date))
+book3ratings2018 <- book3ratings %>%
+  filter(grepl("2018", date))
+book4ratings2018 <- book4ratings %>%
+  filter(grepl("2018", date))
+book5ratings2018 <- book5ratings %>%
+  filter(grepl("2018", date))
+book6ratings2018 <- book6ratings %>%
+  filter(grepl("2018", date))
+book7ratings2018 <- book7ratings %>%
+  filter(grepl("2018", date))
+
+text.u <- unnestIt(text.df)
+book1.u <- unnestIt(book1.df)
+book2.u <- unnestIt(book2.df)
+book3.u <- unnestIt(book3.df)
+book4.u <- unnestIt(book4.df)
+book5.u <- unnestIt(book5.df)
+book6.u <- unnestIt(book6.df)
+book7.u <- unnestIt(book7.df)
+```
+
+The Harry Potter series is a beloved series about Harry and his newfound experiences in the wizarding world. There, he discovers how magic has continued to hide from non-magical humans and to grow both for good and evil. It is also there that Harry discovers the cause of death of his parents and his mortal enemy, Voldemort. More chilling is the prophecy that states clearly that neither can live while the other survives. 
+
+```{r, message=FALSE}
+r.b <- ggplot(ratings.df, aes(x = as.factor(bookNumber), y = rating)) +
+  geom_jitter() +
+  xlab("Book Number") +
+  ylab("Ratings")+
+  theme_few()
+r.b
+```
+
+The above graph is the result of a relatively small section of the reviews on the Goodreads website. As you can see, each book in the series consists of mostly good reviews, with most critics giving it a four or five out of five. 
+
+```{r}
+anova(lm(data=ratings.df, rating~as.factor(bookNumber)))
+```
+
+The anova also states there is too little evidence to say that any of the books has any different ratings than the others.
+
+```{r}
+r.y <- ggplot(ratings.df, aes(x = date, y = rating)) +
+  geom_jitter() +
+  xlab("Year") +
+  ylab("Ratings")+
+  theme_few()
+r.y
+```
+
+Here, we observe overall that most of the five star ratings comes from more recent years that the old ones. Thisis obvious by the dense clustering of five star ratings in the most recent years.  The series clearly didn't pick up steam until around 2012. However, we need to keep in mind that the entire original series was completely published in 2007, so it is interesting to note that it took around five years until it started to gain the popularity it has today. 
+
+```{r}
+r.by <- ggplot(ratings.df, aes(date, rating)) +
+  geom_smooth() +
+  facet_grid(. ~ bookNumber) +
+  theme_calc()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+r.by
+```
+
+Here we have separate plots of each book's rating over time. They each show that most of them started out with decent reviews before surging  to a five star rating. 
+
+```{r}
+t.test(ratings2007$rating, ratings2018$rating)
+```
+
+This t-test confirms that it is highly likely that all ratings in 2007 and the ratings in 2018 are different from each other. 
+
+```{r}
+t.test(book1ratings2007$rating, book1ratings2018$rating)
+t.test(book2ratings2007$rating, book2ratings2018$rating)
+t.test(book3ratings2007$rating, book3ratings2018$rating)
+t.test(book4ratings2007$rating, book4ratings2018$rating)
+t.test(book5ratings2007$rating, book5ratings2018$rating)
+t.test(book6ratings2007$rating, book6ratings2018$rating)
+t.test(book7ratings2007$rating, book7ratings2018$rating)
+```
+
+However, separating the ratings by book, we can see that there isn't enough evidence to suggest that the ratings for most of the books to have changed their ratings. Only books five and six have a high chance that its ratings in 2007 are different than in 2018.
+
+Now we can look at word count and sentiment analysis.
+
+```{r}
+wordCount(text.u, 1000)
+
+unnestIt(text.df) %>%
+  with(wordcloud(word, n, max.words = 100, colors=brewer.pal(8, "Dark2")))
+```
+
+Here we see that the main character's name is the most used word. This should have been obvious since the text is written with an unreliable narrator focused on Harry. His friends' names are next in line since he interacts with them the most. The words "looked" and "eyes" emphasize Rowling's focus on sight and possible indicate that Rowling is trying to state that not everything is as it seems in the magical world. After that, we have many last names like "Weasley", "Malfoy", and "Potter."
+
+```{r}
+sentimentCount(text.df, "")
+```
+
+With all the losses and the suffering in these books, it is no wonder that the Harry Potter series is doused in negativity. There's always the sadness that comes with loss, which is then followed swiftly by anger at the offender. There is also the fear that Voldemort inflicted upon the wizarding world and the disgust that pureblood wizards express at all others. I do, however, believe that this negativity causes the reader to keep turning the page in hopes of Harry overcoming these emotions and doing his best to fight against evil.  
+
+```{r}
+c1 <- wordCount(book1.u, 125)
+c2 <- wordCount(book2.u, 150)
+c3 <- wordCount(book3.u, 200)
+c4 <- wordCount(book4.u, 300)
+c5 <- wordCount(book5.u, 425)
+c6 <- wordCount(book6.u, 300)
+c7 <- wordCount(book7.u, 300)
+
+grid.arrange(c1, c2, c3, c4, c5, c6, c7, nrow = 3)
+```
+
+  Here we have the word counts for the Harry Potter series by books. Unsurprisingly, Harry is still the most used name and the people whom he interacted with the most follow far behind. The main difference between each book is only the order of the names below the first. Other than names, the theme of sight is still prevelant in most of the books. 
+  
+```{r}
+s1 <- sentimentCount(book1.df, "Book 1")
+s2 <- sentimentCount(book2.df, "Book 2")
+s3 <- sentimentCount(book3.df, "Book 3")
+s4 <- sentimentCount(book4.df, "Book 4")
+s5 <- sentimentCount(book5.df, "Book 5")
+s6 <- sentimentCount(book6.df, "Book 6")
+s7 <- sentimentCount(book7.df, "Book 7")
+
+grid.arrange(s1, s2, s3, s4, s5, s6, s7, nrow = 3)
+```
+
+Separated by books, there is not much difference in results. Sadness, anger, trust, and anticipation are always at the top of the list of sentiments when it comes to the Harry Potter Series. 
+

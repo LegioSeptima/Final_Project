@@ -1,0 +1,12 @@
+name: HarryPotterAnalysis
+title: HarryPotterAnalysis
+username:
+account: qrow
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 336958
+bundleId: 1354879
+url: https://qrow.shinyapps.io/HarryPotterAnalysis/
+when: 1525396668.67234
+asMultiple: FALSE
+asStatic: FALSE
